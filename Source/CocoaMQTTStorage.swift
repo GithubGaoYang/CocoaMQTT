@@ -7,6 +7,7 @@
 //
 
 import Foundation
+import CommonCrypto
 
 protocol CocoaMQTTStorageProtocol {
     
@@ -93,7 +94,7 @@ final class CocoaMQTTStorage: CocoaMQTTStorageProtocol {
     }
     
     private class func name(_ clientId: String) -> String {
-        return "cocomqtt-\(clientId)"
+        return "cocomqtt-\(clientId.md5)"
     }
     
     private func parse(_ bytes: [UInt8]) -> (UInt8, [UInt8])? {
@@ -129,4 +130,13 @@ final class CocoaMQTTStorage: CocoaMQTTStorageProtocol {
         return frames
     }
     
+}
+
+extension String {
+    var md5:String {
+        let utf8 = cString(using: .utf8)
+        var digest = [UInt8](repeating: 0, count: Int(CC_MD5_DIGEST_LENGTH))
+        CC_MD5(utf8, CC_LONG(utf8!.count - 1), &digest)
+        return digest.reduce("") { $0 + String(format:"%02X", $1) }
+    }
 }

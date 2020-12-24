@@ -16,19 +16,21 @@ struct FramePubRec: Frame {
     // --- Attributes
     
     var msgid: UInt16
+    var _payload: [UInt8] = []
     
     // --- Attributes End
     
-    init(msgid: UInt16) {
+    init(msgid: UInt16, payload: [UInt8]) {
         self.msgid = msgid
+        self._payload = payload
     }
 }
 
 extension FramePubRec {
- 
+    
     func variableHeader() -> [UInt8] { return msgid.hlBytes }
     
-    func payload() -> [UInt8] { return [] }
+    func payload() -> [UInt8] { return _payload }
 }
 
 
@@ -38,11 +40,16 @@ extension FramePubRec: InitialWithBytes {
         guard fixedHeader == FrameType.pubrec.rawValue else {
             return nil
         }
-        guard bytes.count == 2 else {
+        guard bytes.count >= 2 else {
             return nil
         }
         
         msgid = UInt16(bytes[0]) << 8 + UInt16(bytes[1])
+        
+        if (2 < bytes.count) {
+            _payload = [UInt8](bytes[2..<bytes.count])
+        }
+        
     }
 }
 

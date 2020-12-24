@@ -44,7 +44,32 @@ open class CocoaMQTTLogger: NSObject {
     // logs
     open func log(level: CocoaMQTTLoggerLevel, message: String) {
         guard level.rawValue >= minLevel.rawValue else { return }
-        print("CocoaMQTT(\(level)): \(message)")
+        
+        var symbol: String
+        var description: String
+        switch level {
+        case .debug:
+            symbol = "🛠"
+            description = "DEBUG"
+        case .info:
+            symbol = "📝"
+            description = "INFO"
+        case .warning:
+            symbol = "⚠️"
+            description = "WARNING"
+        case .error:
+            symbol = "❌"
+            description = "ERROR"
+        case .off:
+            symbol = ""
+            description = "OFF"
+        }
+
+        let dateFormatter = DateFormatter()
+        dateFormatter.timeZone = TimeZone(identifier: "Asia/Shanghai")
+        dateFormatter.dateFormat = "yyyy-MM-dd HH:mm:ss.SSS"
+        
+        print("\(dateFormatter.string(from: Date())) \(symbol) \(description) CocoaMQTT: \(message)")
     }
     
     func debug(_ message: String) {

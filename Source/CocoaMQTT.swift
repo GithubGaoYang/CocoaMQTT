@@ -61,7 +61,7 @@ import CocoaAsyncSocket
     func mqtt(_ mqtt: CocoaMQTT, didPublishMessage message: CocoaMQTTMessage, id: UInt16)
     
     ///
-    func mqtt(_ mqtt: CocoaMQTT, didPublishAck id: UInt16)
+    func mqtt(_ mqtt: CocoaMQTT, didPublishAck id: UInt16, payload: [UInt8])
     
     ///
     func mqtt(_ mqtt: CocoaMQTT, didReceiveMessage message: CocoaMQTTMessage, id: UInt16 )
@@ -87,10 +87,12 @@ import CocoaAsyncSocket
     @objc optional func mqtt(_ mqtt: CocoaMQTT, didReceive trust: SecTrust, completionHandler: @escaping (Bool) -> Void)
     
     ///
-    @objc optional func mqtt(_ mqtt: CocoaMQTT, didPublishComplete id: UInt16)
+    @objc optional func mqtt(_ mqtt: CocoaMQTT, didPublishComplete id: UInt16, payload: [UInt8])
     
     ///
     @objc optional func mqtt(_ mqtt: CocoaMQTT, didStateChangeTo state: CocoaMQTTConnState)
+    
+    func mqtt(_ mqtt: CocoaMQTT, didFailed message: CocoaMQTTMessage, id: UInt16)
 }
 
 /**
@@ -191,6 +193,12 @@ public class CocoaMQTT: NSObject, CocoaMQTTClient {
         set { deliver.retryTimeInterval = newValue }
     }
     
+    /// 最大重试次数，小于0表示无限重试
+    public var deliverMaxRetryCount: Int {
+        get { return deliver.maxRetryCount }
+        set { deliver.maxRetryCount = newValue }
+    }
+    
     /// Message queue size. default 1000
     ///
     /// The new publishing messages of Qos1/Qos2 will be drop, if the queue is full
@@ -277,7 +285,7 @@ public class CocoaMQTT: NSObject, CocoaMQTTClient {
     // Closures
     public var didConnectAck: (CocoaMQTT, CocoaMQTTConnAck) -> Void = { _, _ in }
     public var didPublishMessage: (CocoaMQTT, CocoaMQTTMessage, UInt16) -> Void = { _, _, _ in }
-    public var didPublishAck: (CocoaMQTT, UInt16) -> Void = { _, _ in }
+    public var didPublishAck: (CocoaMQTT, UInt16, [UInt8]) -> Void = { _, _, _ in }
     public var didReceiveMessage: (CocoaMQTT, CocoaMQTTMessage, UInt16) -> Void = { _, _, _ in }
     public var didSubscribeTopics: (CocoaMQTT, NSDictionary, [String]) -> Void = { _, _, _  in }
     public var didUnsubscribeTopics: (CocoaMQTT, [String]) -> Void = { _, _ in }
@@ -285,8 +293,9 @@ public class CocoaMQTT: NSObject, CocoaMQTTClient {
     public var didReceivePong: (CocoaMQTT) -> Void = { _ in }
     public var didDisconnect: (CocoaMQTT, Error?) -> Void = { _, _ in }
     public var didReceiveTrust: (CocoaMQTT, SecTrust, @escaping (Bool) -> Swift.Void) -> Void = { _, _, _ in }
-    public var didCompletePublish: (CocoaMQTT, UInt16) -> Void = { _, _ in }
+    public var didCompletePublish: (CocoaMQTT, UInt16, [UInt8]) -> Void = { _, _, _ in }
     public var didChangeState: (CocoaMQTT, CocoaMQTTConnState) -> Void = { _, _ in }
+    public var didSendFailed: (CocoaMQTT, CocoaMQTTMessage, UInt16) -> Void = { _, _, _ in }
     
     /// Initial client object
     ///
@@ -338,12 +347,12 @@ public class CocoaMQTT: NSObject, CocoaMQTTClient {
         return _msgid
     }
 
-    fileprivate func puback(_ type: FrameType, msgid: UInt16) {
+    fileprivate func puback(_ type: FrameType, msgid: UInt16, payload: [UInt8]) {
         switch type {
         case .puback:
-            send(FramePubAck(msgid: msgid))
+            send(FramePubAck(msgid: msgid, payload: payload))
         case .pubrec:
-            send(FramePubRec(msgid: msgid))
+            send(FramePubRec(msgid: msgid, payload: []))
         case .pubcomp:
             send(FramePubComp(msgid: msgid))
         default: return
@@ -515,6 +524,7 @@ extension CocoaMQTT: CocoaMQTTDeliverProtocol {
         if let publish = frame as? FramePublish {
             let msgid = publish.msgid
             guard let message = sendingMessages[msgid] else {
+                self.deliver.storage?.remove(frame)
                 printError("Want send \(frame), but not found in CocoaMQTT cache")
                 return
             }
@@ -529,6 +539,16 @@ extension CocoaMQTT: CocoaMQTTDeliverProtocol {
             // -- Send PUBREL
             send(pubrel, tag: Int(pubrel.msgid))
         }
+    }
+    
+    func deliver(_ deliver: CocoaMQTTDeliver, failed id: UInt16) {
+        guard let message = sendingMessages[id] else {
+            printError("Failed send \(id), but not found in CocoaMQTT cache")
+            return
+        }
+        
+        self.delegate?.mqtt(self, didFailed: message, id: id)
+        self.didSendFailed(self, message, id)
     }
 }
 
@@ -681,9 +701,9 @@ extension CocoaMQTT: CocoaMQTTReaderDelegate {
         didReceiveMessage(self, message, publish.msgid)
         
         if message.qos == .qos1 {
-            puback(FrameType.puback, msgid: publish.msgid)
+            puback(FrameType.puback, msgid: publish.msgid, payload: [])
         } else if message.qos == .qos2 {
-            puback(FrameType.pubrec, msgid: publish.msgid)
+            puback(FrameType.pubrec, msgid: publish.msgid, payload: [])
         }
     }
 
@@ -692,8 +712,8 @@ extension CocoaMQTT: CocoaMQTTReaderDelegate {
         
         deliver.ack(by: puback)
         
-        delegate?.mqtt(self, didPublishAck: puback.msgid)
-        didPublishAck(self, puback.msgid)
+        delegate?.mqtt(self, didPublishAck: puback.msgid, payload: puback.payload())
+        didPublishAck(self, puback.msgid, puback.payload())
     }
     
     func didReceive(_ reader: CocoaMQTTReader, pubrec: FramePubRec) {
@@ -705,7 +725,7 @@ extension CocoaMQTT: CocoaMQTTReaderDelegate {
     func didReceive(_ reader: CocoaMQTTReader, pubrel: FramePubRel) {
         printDebug("RECV: \(pubrel)")
 
-        puback(FrameType.pubcomp, msgid: pubrel.msgid)
+        puback(FrameType.pubcomp, msgid: pubrel.msgid, payload: pubrel.payload())
     }
 
     func didReceive(_ reader: CocoaMQTTReader, pubcomp: FramePubComp) {
@@ -713,8 +733,8 @@ extension CocoaMQTT: CocoaMQTTReaderDelegate {
 
         deliver.ack(by: pubcomp)
         
-        delegate?.mqtt?(self, didPublishComplete: pubcomp.msgid)
-        didCompletePublish(self, pubcomp.msgid)
+        delegate?.mqtt?(self, didPublishComplete: pubcomp.msgid, payload: pubcomp.payload())
+        didCompletePublish(self, pubcomp.msgid, pubcomp.payload())
     }
 
     func didReceive(_ reader: CocoaMQTTReader, suback: FrameSubAck) {

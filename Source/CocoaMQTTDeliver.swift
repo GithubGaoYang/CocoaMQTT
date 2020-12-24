@@ -14,6 +14,7 @@ protocol CocoaMQTTDeliverProtocol: AnyObject {
     var delegateQueue: DispatchQueue { get set }
     
     func deliver(_ deliver: CocoaMQTTDeliver, wantToSend frame: Frame)
+    func deliver(_ deliver: CocoaMQTTDeliver, failed id: UInt16)
 }
 
 private struct InflightFrame {
@@ -22,14 +23,16 @@ private struct InflightFrame {
     var frame: Frame
     
     var timestamp: TimeInterval
+    var retryCount: Int
     
     init(frame: Frame) {
-        self.init(frame: frame, timestamp: Date.init(timeIntervalSinceNow: 0).timeIntervalSince1970)
+        self.init(frame: frame, timestamp: Date.init(timeIntervalSinceNow: 0).timeIntervalSince1970, retryCount: 0)
     }
     
-    init(frame: Frame, timestamp: TimeInterval) {
+    init(frame: Frame, timestamp: TimeInterval, retryCount: Int) {
         self.frame = frame
         self.timestamp = timestamp
+        self.retryCount = retryCount
     }
 }
 
@@ -65,6 +68,9 @@ class CocoaMQTTDeliver: NSObject {
     
     /// Retry time interval millisecond
     var retryTimeInterval: Double = 5000
+    
+    // 最大重试次数，小于0表示无限重试
+    var maxRetryCount: Int = -1
     
     private var awaitingTimer: CocoaMQTTTimer?
     
@@ -209,17 +215,44 @@ extension CocoaMQTTDeliver {
         }
         
         let nowTimestamp = Date(timeIntervalSinceNow: 0).timeIntervalSince1970
+        
+        var shouldRemoveFrames = [InflightFrame]()
+        
         for (idx, frame) in inflight.enumerated() {
-            if (nowTimestamp - frame.timestamp) >= (retryTimeInterval/1000.0) {
+            if maxRetryCount >= 0 && frame.retryCount >= maxRetryCount {
+                // 发送失败
+                shouldRemoveFrames.append(frame)
+            } else if (nowTimestamp - frame.timestamp) >= (retryTimeInterval/1000.0) * Double(frame.retryCount) { // 原方法存在几毫秒的误差
                 
                 var duplicatedFrame = frame
                 duplicatedFrame.frame.dup = true
-                duplicatedFrame.timestamp = nowTimestamp
+                duplicatedFrame.retryCount += 1
                 
                 inflight[idx] = duplicatedFrame
                 
                 printInfo("Re-delivery frame \(duplicatedFrame.frame)")
                 sendfun(duplicatedFrame.frame)
+            }
+        }
+        
+        shouldRemoveFrames.forEach { (shouldRemoveFrame) in
+            if let msgid = (shouldRemoveFrame.frame as? FramePubAck)?.msgid ?? (shouldRemoveFrame.frame as? FramePubComp)?.msgid ?? (shouldRemoveFrame.frame as? FramePublish)?.msgid ?? (shouldRemoveFrame.frame as? FramePubRec)?.msgid ?? (shouldRemoveFrame.frame as? FramePubRel)?.msgid,
+               let index = inflight.firstIndex(where: { (inflightFrame) -> Bool in
+                let msgid2 = (inflightFrame.frame as? FramePubAck)?.msgid ?? (inflightFrame.frame as? FramePubComp)?.msgid ?? (inflightFrame.frame as? FramePublish)?.msgid ?? (inflightFrame.frame as? FramePubRec)?.msgid ?? (inflightFrame.frame as? FramePubRel)?.msgid
+                return msgid == msgid2
+               }) {
+                inflight.remove(at: index)
+                
+                self.storage?.remove(shouldRemoveFrame.frame)
+                
+                guard let delegate = self.delegate else {
+                    printError("The deliver delegate is nil!!! the frame will be drop: \(shouldRemoveFrame)")
+                    return
+                }
+                
+                delegate.delegateQueue.async {
+                    delegate.deliver(self, failed: msgid)
+                }
             }
         }
     }

@@ -179,6 +179,7 @@ extension ViewController: CocoaMQTTDelegate {
     
     func mqtt(_ mqtt: CocoaMQTT, didStateChangeTo state: CocoaMQTTConnState) {
         TRACE("new state: \(state)")
+        self.navigationItem.title = "\(state)"
     }
     
     func mqtt(_ mqtt: CocoaMQTT, didPublishMessage message: CocoaMQTTMessage, id: UInt16) {

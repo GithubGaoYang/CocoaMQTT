@@ -27,6 +27,29 @@ extension UInt16 {
     }
 }
 
+extension UInt32 {
+    //Most Significant Byte (MSB)
+    private var highByte2: UInt8 {
+        return UInt8( (self & 0xFF000000) >> 24)
+    }
+    //Most Significant Byte (MSB)
+    private var highByte1: UInt8 {
+        return UInt8( (self & 0xFF0000) >> 16)
+    }
+    
+    //Least Significant Byte (LSB)
+    private var lowByte2: UInt8 {
+        return UInt8( (self & 0xFF00) >> 8)
+    }
+    //Least Significant Byte (LSB)
+    private var lowByte1: UInt8 {
+        return UInt8(self & 0x00FF)
+    }
+    
+    var hlBytes: [UInt8] {
+        return [highByte2, highByte1, lowByte2, lowByte1]
+    }
+}
 
 extension String {
     
